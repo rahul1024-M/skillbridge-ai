@@ -413,8 +413,8 @@ export default function Dashboard() {
         </button>
       </section>
 
-      <p className="pb-2 text-center text-[10px] text-slate-400">
-        SkillBridge AI · Dashboard preview · Sample metrics and activities
+      <p className="pb-2 text-center text-[16px] text-slate-800">
+        © 2026 SkillBridge AI. All Rights Reserved.
       </p>
     </div>
   );

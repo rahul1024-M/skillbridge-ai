@@ -3,14 +3,18 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import Sidebar from "./components/Sidebar";
 import Navbar from "./components/Navbar";
-
 import Dashboard from "./pages/Dashboard";
-import Profile from "./pages/Profile";
+
 import SkillAnalyzer from "./pages/SkillAnalyzer";
 import ProofOfWork from "./pages/ProofOfWork";
 import Roadmap from "./pages/Roadmap";
 import Projects from "./pages/Projects";
 import Internships from "./pages/Internships";
+import Hackathons from "./pages/Hackathons";
+import Courses from "./pages/Courses";
+import Progress from "./pages/Progress";
+import Settings from "./pages/Settings";
+import Profile from "./pages/Profile";
 
 const Placeholder = ({ title }) => (
   <div className="p-8">
@@ -40,10 +44,10 @@ function AppLayout() {
 
               <Route path="/projects" element={<Projects />} />
               <Route path="/internships" element={<Internships />} />
-              <Route path="/hackathons" element={<Placeholder title="Hackathons" />} />
-              <Route path="/courses" element={<Placeholder title="Courses" />} />
-              <Route path="/progress" element={<Placeholder title="My Progress" />} />
-              <Route path="/settings" element={<Placeholder title="Settings" />} />
+              <Route path="/hackathons" element={<Hackathons />} />
+              <Route path="/courses" element={<Courses />} />
+              <Route path="/progress" element={<Progress />} />
+              <Route path="/settings" element={<Settings />} />
 
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
