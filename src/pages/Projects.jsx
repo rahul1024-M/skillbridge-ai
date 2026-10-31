@@ -1,5 +1,6 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   FolderKanban,
   Sparkles,
@@ -13,8 +14,12 @@ import {
   Layers,
   Target,
 } from "lucide-react";
+import { useAuth } from "../hooks/useAuth";
+import { fetchStudentProfile } from "../services/profileRepository";
+import { generateCareerPlan, saveCareerAnalysis } from "../services/careerIntelligence";
+import { supabase } from "../services/supabase";
 
-const projectData = [
+export const projectData = [
   {
     id: 1,
     title: "Student Management System",
@@ -78,32 +83,213 @@ const projectData = [
 ];
 
 const filters = ["All", "Beginner", "Intermediate", "Advanced"];
+const PROJECT_IDEA_PREFIX = "SkillBridge curated project idea:";
+
+function ideaMarker(projectId) {
+  return `${PROJECT_IDEA_PREFIX} ${projectId}`;
+}
 
 export default function Projects() {
+  const { isConfigured, user, session } = useAuth();
+  const location = useLocation();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
-  const [saved, setSaved] = useState([]);
-  const [started, setStarted] = useState([]);
+  const [projectView, setProjectView] = useState("all");
   const [selected, setSelected] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [projectAction, setProjectAction] = useState("");
+  const [projectMessage, setProjectMessage] = useState("");
+  const [projectError, setProjectError] = useState("");
+  const [personalizedProjects, setPersonalizedProjects] = useState([]);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState("");
 
-  const filteredProjects = projectData.filter((project) => {
-    const matchesSearch = `${project.title} ${project.category} ${project.technologies.join(" ")}`
-      .toLowerCase()
-      .includes(search.toLowerCase());
+  useEffect(() => {
+    let active = true;
+    if (!isConfigured || !user || !supabase) {
+      setProfile(null);
+      setProfileLoading(false);
+      return () => { active = false; };
+    }
+    setProfileLoading(true);
+    fetchStudentProfile(user)
+      .then((studentProfile) => {
+        if (active) setProfile(studentProfile);
+      })
+      .catch((loadError) => {
+        if (active) {
+          console.error("Project recommendation profile load error:", loadError);
+          setPlanError(loadError.message || "Unable to load your profile.");
+          setProjectError(loadError.message || "Your student projects could not be loaded.");
+        }
+      })
+      .finally(() => {
+        if (active) setProfileLoading(false);
+      });
+    const handleProfileUpdate = (event) => {
+      if (event.detail?.projects && active) setProfile(event.detail);
+      else if (active) {
+        fetchStudentProfile(user)
+          .then((studentProfile) => { if (active) setProfile(studentProfile); })
+          .catch((loadError) => {
+            if (active) setPlanError(loadError.message || "Unable to refresh your profile.");
+          });
+      }
+    };
+    window.addEventListener("studentProfileUpdated", handleProfileUpdate);
+    return () => {
+      active = false;
+      window.removeEventListener("studentProfileUpdated", handleProfileUpdate);
+    };
+  }, [isConfigured, user]);
 
-    return matchesSearch && (filter === "All" || project.level === filter);
-  });
-
-  const toggleSaved = (id) => {
-    setSaved((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
+  const generateProjects = async () => {
+    if (!profile?.targetRole || !session?.access_token || !user) return;
+    setPlanLoading(true);
+    setPlanError("");
+    try {
+      const response = await generateCareerPlan(session.access_token);
+      await saveCareerAnalysis(user.id, response);
+      setPersonalizedProjects(response.projects || []);
+      window.dispatchEvent(new CustomEvent("studentProgressUpdated"));
+    } catch (generationError) {
+      console.error("Personalized project generation error:", generationError);
+      setPlanError(generationError.message || "Unable to generate project suggestions.");
+    } finally {
+      setPlanLoading(false);
+    }
   };
 
-  const toggleStarted = (id) => {
-    setStarted((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+  const filteredProjects = projectData.filter((project) => {
+    const matchesSearch = `${project.title} ${project.category} ${project.description} ${project.technologies.join(" ")} ${project.skills.join(" ")}`
+      .toLowerCase()
+      .includes(search.toLowerCase());
+    const savedProject = profile?.projects?.find((item) => item.contribution === ideaMarker(project.id));
+    const isSaved = Boolean(savedProject);
+    const isStarted = savedProject?.status === "In progress" || savedProject?.status === "Completed";
+    const matchesView = projectView === "all" ||
+      (projectView === "saved" && isSaved) ||
+      (projectView === "started" && isStarted);
+    return matchesSearch && matchesView && (filter === "All" || project.level === filter);
+  });
+
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    const searchQuery = query.get("search");
+    if (searchQuery !== null) setSearch(searchQuery);
+  }, [location.search]);
+
+  useEffect(() => {
+    const searchQuery = new URLSearchParams(location.search).get("search");
+    if (!searchQuery) return;
+    const match = projectData.find((project) =>
+      project.title.toLocaleLowerCase() === searchQuery.toLocaleLowerCase()
     );
+    if (match) setSelected(match);
+  }, [location.search]);
+
+  useEffect(() => {
+    const requestedView = new URLSearchParams(location.search).get("view");
+    if (["all", "saved", "started"].includes(requestedView)) {
+      setProjectView(requestedView);
+    }
+  }, [location.search]);
+
+  const saveProjectIdea = async (project, status) => {
+    if (!isConfigured || !user || !supabase) {
+      setProjectError("Sign in with a configured student account to save project activity.");
+      return;
+    }
+    setProjectAction(String(project.id));
+    setProjectError("");
+    setProjectMessage("");
+    const marker = ideaMarker(project.id);
+    try {
+      const existing = profile?.projects?.find((item) => item.contribution === marker);
+      if (status === "remove") {
+        if (!existing || existing.status !== "Planned") {
+          throw new Error("Only a saved project that has not been started can be removed.");
+        }
+        const { error } = await supabase
+          .from("projects")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("id", existing.id);
+        if (error) throw error;
+        setProfile((current) => ({
+          ...current,
+          projects: (current?.projects || []).filter((item) => item.id !== existing.id),
+        }));
+        setProjectMessage(`${project.title} removed from saved projects.`);
+      } else {
+        const record = {
+          user_id: user.id,
+          title: project.title,
+          description: project.description,
+          technologies: project.technologies,
+          status,
+          contribution: marker,
+        };
+        let savedRecord;
+        if (existing) {
+          const { data, error } = await supabase
+            .from("projects")
+            .update(record)
+            .eq("user_id", user.id)
+            .eq("id", existing.id)
+            .select("id,title,description,technologies,status,contribution")
+            .single();
+          if (error) throw error;
+          savedRecord = data;
+        } else {
+          const { data, error } = await supabase
+            .from("projects")
+            .insert(record)
+            .select("id,title,description,technologies,status,contribution")
+            .single();
+          if (error) throw error;
+          savedRecord = data;
+        }
+        const normalizedRecord = {
+          id: savedRecord.id,
+          title: savedRecord.title,
+          description: savedRecord.description || "",
+          technologies: savedRecord.technologies || [],
+          status: savedRecord.status,
+          contribution: savedRecord.contribution,
+          repositoryUrl: "",
+          liveUrl: "",
+        };
+        setProfile((current) => ({
+          ...(current || {}),
+          projects: [
+            ...(current?.projects || []).filter((item) => item.contribution !== marker),
+            normalizedRecord,
+          ],
+        }));
+        setProjectMessage(status === "Planned"
+          ? `${project.title} saved to your profile.`
+          : `${project.title} added to your active projects.`);
+      }
+      window.dispatchEvent(new CustomEvent("studentProgressUpdated"));
+    } catch (actionError) {
+      console.error("Unable to update saved project activity:", actionError);
+      setProjectError(actionError.message || "The project activity could not be saved.");
+    } finally {
+      setProjectAction("");
+    }
+  };
+
+  const ideaRecord = (project) =>
+    profile?.projects?.find((item) => item.contribution === ideaMarker(project.id));
+  const savedProjects = projectData.filter((project) => Boolean(ideaRecord(project)));
+  const startedProjects = projectData.filter((project) =>
+    ["In progress", "Completed"].includes(ideaRecord(project)?.status)
+  );
+  const selectProjectView = (view) => {
+    setProjectView(view);
+    document.getElementById("project-catalog")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
@@ -120,16 +306,22 @@ export default function Projects() {
             Discover practical projects, strengthen your technical skills and build a portfolio that demonstrates what you can do.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+        <button type="button" onClick={() => document.getElementById("project-catalog")?.scrollIntoView({ behavior: "smooth" })} className="flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700 hover:bg-blue-100">
           <FolderKanban size={18} /> Project Hub
-        </div>
+        </button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Stat icon={Layers} label="Available Projects" value={projectData.length} />
-        <Stat icon={CheckCircle2} label="Projects Started" value={started.length} />
-        <Stat icon={Target} label="Saved Projects" value={saved.length} />
+        <Stat icon={Layers} label="Available Projects" value={projectData.length} onClick={() => selectProjectView("all")} />
+        <Stat icon={CheckCircle2} label="Projects Started" value={profileLoading ? "…" : startedProjects.length} onClick={() => selectProjectView("started")} />
+        <Stat icon={Target} label="Saved Projects" value={profileLoading ? "…" : savedProjects.length} onClick={() => selectProjectView("saved")} />
       </div>
+      {(projectMessage || projectError || (!profileLoading && (!isConfigured || !user))) && (
+        <div role={projectError ? "alert" : "status"} className={`rounded-xl border p-3 text-sm ${projectError ? "border-red-200 bg-red-50 text-red-700" : "border-blue-100 bg-blue-50 text-blue-800"}`}>
+          {projectError || projectMessage || "Sign in to save or start projects to your student profile."}
+          {projectError && <button type="button" onClick={() => setProjectError("")} className="ml-3 font-semibold underline">Dismiss</button>}
+        </div>
+      )}
 
       <div className="rounded-2xl bg-gradient-to-r from-slate-950 via-blue-950 to-indigo-900 p-6 text-white sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-5">
@@ -150,7 +342,58 @@ export default function Projects() {
         </div>
       </div>
 
-      <section className="space-y-5">
+      <section className="rounded-2xl border border-violet-100 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-violet-700">
+              <Sparkles size={14} /> Profile-based project ideas
+            </p>
+            <h2 className="mt-2 text-lg font-bold text-slate-900">
+              {profile?.targetRole ? `Build toward ${profile.targetRole}` : "Set a career target to personalize project ideas"}
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm text-slate-500">
+              AI suggestions use your saved skills and goal. They are proposals, not existing projects or verified opportunities.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={generateProjects}
+            disabled={!isConfigured || !session || !profile?.targetRole || planLoading}
+            className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {planLoading ? "Generating..." : "Generate project ideas"}
+          </button>
+        </div>
+        {!isConfigured && (
+          <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+            AI project suggestions require configured Supabase authentication and the backend. No generated suggestions are being simulated.
+          </p>
+        )}
+        {planError && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{planError}</p>}
+        {personalizedProjects.length > 0 && (
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            {personalizedProjects.map((project) => (
+              <article key={project.title} className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                <p className="text-xs font-semibold text-violet-700">
+                  {project.difficulty} · Estimated {project.estimatedWeeks} weeks
+                </p>
+                <h3 className="mt-1 font-bold text-slate-900">{project.title}</h3>
+                <p className="mt-2 text-sm leading-5 text-slate-600">{project.description}</p>
+                {project.technologies?.length > 0 && (
+                  <p className="mt-3 text-xs text-slate-500">{project.technologies.join(" · ")}</p>
+                )}
+                {project.milestones?.length > 0 && (
+                  <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-slate-600">
+                    {project.milestones.map((milestone) => <li key={milestone}>{milestone}</li>)}
+                  </ol>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section id="project-catalog" className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-slate-900">Explore Projects</h2>
@@ -188,9 +431,34 @@ export default function Projects() {
           </div>
         </div>
 
+        <div className="flex flex-wrap gap-2" aria-label="Project activity filter">
+          {[
+            ["all", "All projects"],
+            ["saved", "Saved"],
+            ["started", "Started"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setProjectView(value)}
+              aria-pressed={projectView === value}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${projectView === value ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
           {filteredProjects.map((project) => (
             <article key={project.id} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+              {(() => {
+                const record = ideaRecord(project);
+                const isStarted = ["In progress", "Completed"].includes(record?.status);
+                const isSaved = Boolean(record);
+                const isBusy = Boolean(projectAction);
+                return (
+                  <>
               <div className="flex items-start justify-between gap-3">
                 <div className="rounded-xl bg-blue-50 p-3 text-blue-600">
                   <FolderKanban size={22} />
@@ -226,7 +494,7 @@ export default function Projects() {
                 ))}
               </div>
 
-              {started.includes(project.id) && (
+              {isStarted && (
                 <p className="mt-4 flex items-center gap-2 text-xs font-semibold text-emerald-600">
                   <CheckCircle2 size={15} /> Added to your active projects
                 </p>
@@ -234,23 +502,38 @@ export default function Projects() {
 
               <div className="mt-auto flex items-center gap-2 pt-5">
                 <button
+                  type="button"
                   onClick={() => setSelected(project)}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   View Details <ArrowUpRight size={14} />
                 </button>
                 <button
-                  onClick={() => toggleSaved(project.id)}
-                  title="Save project"
+                  type="button"
+                  disabled={isBusy || profileLoading || (isStarted && record?.status !== "Planned")}
+                  onClick={() => saveProjectIdea(project, isSaved ? "remove" : "Planned")}
+                  title={isStarted ? "Move an active project back to saved ideas before removing it" : isSaved ? "Remove saved project" : "Save project"}
+                  aria-label={isSaved ? `Remove ${project.title} from saved projects` : `Save ${project.title}`}
                   className={`rounded-xl border p-2.5 transition ${
-                    saved.includes(project.id)
+                    isSaved
                       ? "border-blue-200 bg-blue-50 text-blue-600"
                       : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                  }`}
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
-                  {saved.includes(project.id) ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+                  {isBusy ? <span className="text-[10px]">…</span> : isSaved ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+                </button>
+                <button
+                  type="button"
+                  disabled={isBusy || profileLoading || isStarted}
+                  onClick={() => saveProjectIdea(project, "In progress")}
+                  className="rounded-xl bg-blue-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBusy ? "Saving…" : isStarted ? "Started" : "Start"}
                 </button>
               </div>
+                  </>
+                );
+              })()}
             </article>
           ))}
         </div>
@@ -259,7 +542,7 @@ export default function Projects() {
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
             <Search size={30} className="mx-auto text-slate-300" />
             <h3 className="mt-3 font-bold text-slate-800">No projects found</h3>
-            <p className="mt-1 text-sm text-slate-500">Try another search or difficulty filter.</p>
+            <p className="mt-1 text-sm text-slate-500">{projectView === "saved" ? "No saved projects match. Save a project from All projects to see it here." : projectView === "started" ? "No started projects match. Start a project to track it here." : "Try another search or difficulty filter."}</p>
           </div>
         )}
       </section>
@@ -309,13 +592,17 @@ export default function Projects() {
             </div>
 
             <button
+              type="button"
+              disabled={Boolean(projectAction) || profileLoading}
               onClick={() => {
-                toggleStarted(selected.id);
+                const record = ideaRecord(selected);
+                const isStarted = ["In progress", "Completed"].includes(record?.status);
+                void saveProjectIdea(selected, isStarted ? "Planned" : "In progress");
                 setSelected(null);
               }}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {started.includes(selected.id) ? "Remove from Active Projects" : "Start This Project"}
+              {["In progress", "Completed"].includes(ideaRecord(selected)?.status) ? "Move back to Saved Projects" : "Start This Project"}
               <ArrowUpRight size={16} />
             </button>
           </div>
@@ -325,14 +612,14 @@ export default function Projects() {
   );
 }
 
-function Stat({ icon: Icon, label, value }) {
+function Stat({ icon: Icon, label, value, onClick }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <button type="button" onClick={onClick} className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-blue-200 hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
       <div className="flex items-center justify-between">
         <div className="rounded-xl bg-blue-50 p-3 text-blue-600"><Icon size={20} /></div>
       </div>
       <p className="mt-5 text-xs font-medium text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-extrabold text-slate-900">{value}</p>
-    </div>
+    </button>
   );
 }

@@ -14,15 +14,19 @@ import {
   FileCode2,
   Target,
 } from "lucide-react";
+import { useAuth } from "../hooks/useAuth";
+import { supabase } from "../services/supabase";
 
 const API_URL = (
   import.meta.env.VITE_API_URL || "http://localhost:5000"
 ).replace(/\/+$/, "");
 
 export default function ProofOfWork() {
+  const { isConfigured, session } = useAuth();
   const [repoUrl, setRepoUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [result, setResult] = useState(null);
 
   const validateGitHubUrl = (url) => {
@@ -47,7 +51,13 @@ export default function ProofOfWork() {
   const handleAudit = async (event) => {
     event.preventDefault();
     setError("");
+    setSaveError("");
     setResult(null);
+
+    if (!isConfigured || !session?.access_token || !supabase) {
+      setError("Sign in with a configured Supabase account before submitting an audit. Audit records are saved to your private account.");
+      return;
+    }
 
     const cleanUrl = repoUrl.trim().replace(/\/+$/, "");
 
@@ -57,17 +67,21 @@ export default function ProofOfWork() {
     }
 
     setLoading(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 120_000);
 
     try {
       const response = await fetch(`${API_URL}/api/github/audit`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ repoUrl: cleanUrl }),
+        signal: controller.signal,
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(
@@ -76,12 +90,23 @@ export default function ProofOfWork() {
       }
 
       setResult(data);
+      const { error: saveAuditError } = await supabase.rpc("save_proof_of_work_audit", {
+        p_result: data,
+      });
+      if (saveAuditError) {
+        console.error("Unable to persist repository audit:", saveAuditError);
+        setSaveError("The audit finished, but it could not be saved to your account. Retry after checking your database migration and connection.");
+      } else {
+        window.dispatchEvent(new CustomEvent("studentProgressUpdated"));
+      }
     } catch (err) {
-      setError(
-        err.message ||
-          "Unable to connect to the audit server. Please try again."
-      );
+      setError(err.name === "AbortError"
+        ? "The audit timed out. Check the repository size and retry."
+        : err instanceof TypeError
+          ? `Cannot reach the audit server at ${API_URL}. Check that the backend is running and its CORS configuration allows this page.`
+          : err.message || "The repository audit could not be completed. Please try again.");
     } finally {
+      window.clearTimeout(timeout);
       setLoading(false);
     }
   };
@@ -94,6 +119,19 @@ export default function ProofOfWork() {
           <Sparkles size={13} />
           AI-POWERED SKILL VERIFICATION
         </div>
+
+        {!isConfigured && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+            Audits require a signed-in Supabase account to authorize the request and persist private audit history. Configure Supabase and the backend before submitting.
+          </div>
+        )}
+
+        {saveError && (
+          <div role="alert" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <AlertCircle size={17} className="mt-0.5 shrink-0" />
+            {saveError}
+          </div>
+        )}
 
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
           Proof of Work
@@ -143,14 +181,14 @@ export default function ProofOfWork() {
                       setRepoUrl(event.target.value)
                     }
                     placeholder="https://github.com/username/repository"
-                    disabled={loading}
+                    disabled={loading || !isConfigured || !session}
                     className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50 disabled:opacity-60"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={loading || !repoUrl.trim()}
+                  disabled={loading || !isConfigured || !session || !repoUrl.trim()}
                   className="flex h-12 items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {loading ? (
@@ -244,10 +282,53 @@ export default function ProofOfWork() {
 
                 <ResultMetric
                   label="Review Status"
-                  value={result.analysis?.status || "Reviewed"}
+                  value={result.analysis?.status || "Unable to verify"}
                   icon={ShieldCheck}
                 />
               </div>
+
+              <p className="text-xs leading-5 text-slate-500">
+                {result.repository?.commitSha
+                  ? `Commit ${result.repository.commitSha.slice(0, 12)} · `
+                  : ""}
+                {result.auditedAt ? `Reviewed ${new Date(result.auditedAt).toLocaleString()}` : ""}
+                {result.repository?.languages?.length ? ` · Languages: ${result.repository.languages.join(", ")}` : ""}
+              </p>
+
+              {Array.isArray(result.analysis?.categories) && (
+                <div>
+                  <h3 className="mb-3 text-sm font-bold text-slate-900">
+                    Review rubric <span className="font-normal text-slate-500">(10 categories, each scored 0–5)</span>
+                  </h3>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {result.analysis.categories.map((category) => (
+                      <article key={category.name} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-800">{category.name}</span>
+                          <span className="text-xs font-bold text-blue-700">{category.score}/5</span>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-5 text-slate-500">{category.evidence}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(result.repository?.files) && (
+                <details className="rounded-xl border border-slate-100 p-4">
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+                    Files reviewed ({result.repository.files.length})
+                  </summary>
+                  <ul className="mt-3 space-y-1 text-xs text-slate-600">
+                    {result.repository.files.map((file) => (
+                      <li key={file.path} className="flex justify-between gap-3">
+                        <code className="break-all">{file.path}</code>
+                        <span className="shrink-0">{file.bytesReviewed} bytes</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
 
               <div>
                 <h3 className="mb-2 text-sm font-bold text-slate-900">
@@ -292,10 +373,9 @@ export default function ProofOfWork() {
                 )}
 
               <p className="border-t border-slate-100 pt-4 text-[11px] leading-5 text-slate-400">
-                AI-generated assessment based on the files reviewed.
-                This is not a formal certification or proof of
-                authorship. Scores are indicative and should be
-                interpreted with the reviewed evidence.
+                {saveError ? "This result is only in this page and was not persisted. " : "Audit result saved in your private account. "}
+                AI-generated assessment based on a limited sample of public files.
+                It does not prove authorship or provide formal certification. A language appearing in source code alone does not establish proficiency.
               </p>
             </section>
           )}

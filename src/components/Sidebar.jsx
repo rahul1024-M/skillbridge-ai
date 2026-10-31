@@ -44,81 +44,155 @@ const navigation = [
     title: "PERFORMANCE",
     items: [
       { name: "My Progress", path: "/progress", icon: TrendingUp },
+      { name: "SkillBridge ID", path: "/skillbridge-id", icon: ShieldCheck },
     ],
   },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ isMobileOpen = false, onMobileNavigate = () => {} }) {
   return (
-    <aside className="hidden min-h-screen w-[260px] shrink-0 flex-col border-r border-slate-800 bg-[#111827] text-white lg:flex">
-      <div className="flex h-[76px] items-center gap-3 border-b border-slate-800 px-6">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-violet-600">
-          <GraduationCap size={23} />
-        </div>
-
-        <div>
-          <h1 className="text-lg font-bold tracking-tight">
-            SkillBridge <span className="text-blue-400">AI</span>
-          </h1>
-          <p className="text-[10px] tracking-[2px] text-slate-400">
-            CAREER INTELLIGENCE
-          </p>
-        </div>
-      </div>
-
-      <div className="flex-1 space-y-7 overflow-y-auto px-4 py-7">
-        {navigation.map((section) => (
-          <div key={section.title}>
-            <p className="mb-3 px-3 text-[10px] font-bold tracking-[1.7px] text-slate-500">
-              {section.title}
-            </p>
-
-            <div className="space-y-1">
-              {section.items.map((item) => {
-                const Icon = item.icon;
-
-                return (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end={item.path === "/"}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-xl px-3 py-3 text-[13px] font-medium transition-all ${
-                        isActive
-                          ? "bg-blue-600 text-white shadow-lg shadow-blue-950/40"
-                          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                      }`
-                    }
-                  >
-                    <Icon size={18} strokeWidth={1.8} />
-                    {item.name}
-                  </NavLink>
-                );
-              })}
+    <>
+      {isMobileOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button
+            type="button"
+            aria-label="Close menu"
+            className="absolute inset-0 h-full w-full bg-slate-950/50"
+            onClick={onMobileNavigate}
+          />
+          <nav
+            aria-label="Mobile navigation"
+            className="absolute inset-y-0 left-0 flex w-[280px] flex-col overflow-y-auto bg-[#111827] text-white shadow-2xl"
+          >
+            <div className="flex h-[76px] items-center gap-3 border-b border-slate-800 px-6">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-violet-600">
+                <GraduationCap size={23} />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold tracking-tight">
+                  SkillBridge <span className="text-blue-400">AI</span>
+                </h1>
+                <p className="text-[10px] tracking-[2px] text-slate-400">
+                  CAREER INTELLIGENCE
+                </p>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+            <div className="flex-1 space-y-7 px-4 py-7">
+              {navigation.map((section) => (
+                <div key={section.title}>
+                  <p className="mb-3 px-3 text-[10px] font-bold tracking-[1.7px] text-slate-500">
+                    {section.title}
+                  </p>
+                  <div className="space-y-1">
+                    {section.items.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          end={item.path === "/"}
+                          onClick={onMobileNavigate}
+                          className={({ isActive }) =>
+                            `flex items-center gap-3 rounded-xl px-3 py-3 text-[13px] font-medium transition-all ${
+                              isActive
+                                ? "bg-blue-600 text-white shadow-lg shadow-blue-950/40"
+                                : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                            }`
+                          }
+                        >
+                          <Icon size={18} strokeWidth={1.8} />
+                          {item.name}
+                        </NavLink>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-slate-800 p-4">
+              <NavLink
+                to="/settings"
+                onClick={onMobileNavigate}
+                className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <Settings size={18} />
+                Settings
+              </NavLink>
+            </div>
+          </nav>
+        </div>
+      )}
 
-      <div className="border-t border-slate-800 p-4">
-        <div className="rounded-xl border border-slate-700 bg-slate-800/70 p-4">
-          <div className="mb-2 flex items-center gap-2 text-blue-400">
-            <Sparkles size={16} />
-            <span className="text-xs font-semibold">AI Career Assistant</span>
+      <aside className="hidden min-h-screen w-[260px] shrink-0 flex-col border-r border-slate-800 bg-[#111827] text-white lg:flex">
+        <div className="flex h-[76px] items-center gap-3 border-b border-slate-800 px-6">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-violet-600">
+            <GraduationCap size={23} />
           </div>
-          <p className="text-[11px] leading-relaxed text-slate-400">
-            Discover your strengths and build a career-ready skill profile.
-          </p>
+
+          <div>
+            <h1 className="text-lg font-bold tracking-tight">
+              SkillBridge <span className="text-blue-400">AI</span>
+            </h1>
+            <p className="text-[10px] tracking-[2px] text-slate-400">
+              CAREER INTELLIGENCE
+            </p>
+          </div>
         </div>
 
-        <NavLink
-          to="/settings"
-          className="mt-3 flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-slate-800 hover:text-white"
-        >
-          <Settings size={18} />
-          Settings
-        </NavLink>
-      </div>
-    </aside>
+        <div className="flex-1 space-y-7 overflow-y-auto px-4 py-7">
+          {navigation.map((section) => (
+            <div key={section.title}>
+              <p className="mb-3 px-3 text-[10px] font-bold tracking-[1.7px] text-slate-500">
+                {section.title}
+              </p>
+
+              <div className="space-y-1">
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={item.path}
+                      end={item.path === "/"}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 rounded-xl px-3 py-3 text-[13px] font-medium transition-all ${
+                          isActive
+                            ? "bg-blue-600 text-white shadow-lg shadow-blue-950/40"
+                            : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                        }`
+                      }
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      {item.name}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t border-slate-800 p-4">
+          <div className="rounded-xl border border-slate-700 bg-slate-800/70 p-4">
+            <div className="mb-2 flex items-center gap-2 text-blue-400">
+              <Sparkles size={16} />
+              <span className="text-xs font-semibold">AI Career Assistant</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              Discover your strengths and build a career-ready skill profile.
+            </p>
+          </div>
+
+          <NavLink
+            to="/settings"
+            className="mt-3 flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-slate-800 hover:text-white"
+          >
+            <Settings size={18} />
+            Settings
+          </NavLink>
+        </div>
+      </aside>
+    </>
   );
 }
